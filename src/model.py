@@ -1,11 +1,11 @@
 import numpy as np
-from sklearn.ensemble import GradientBoostingClassifier
+import lightgbm as lgbm
 from typing import Tuple, Dict, Any
 
 
 def _expand_exposure_probability(array: np.array, size: Tuple[int]) -> np.array:
-    expands_indicator = (1, ) + size
-    return np.tile(array, expands_indicator)
+    expands_indicator = (1,) + size
+    return np.tile(array[:, np.newaxis, np.newaxis], expands_indicator)
 
 
 def _expand_relevance_probability(array: np.array, size: Tuple[int]) -> np.array:
@@ -21,7 +21,7 @@ class RegressionBasedEM:
                  clicks: np.array,
                  item_exposure: np.array,
                  query_document_features: np.array,
-                 gbdt_params: Dict[str, Any] = dict(max_depth=1, learning_rate=0.2, warm_start=True)):
+                 gbdt_params: Dict[str, Any] = dict(max_depth=3, learning_rate=0.2, class_weight='balanced')):
         self._position = position
         self._query = query
         self._document = document
@@ -32,9 +32,10 @@ class RegressionBasedEM:
         self._relevance_probability = np.zeros([query, document])
         self._clicks = clicks
         self._feature_vectors = query_document_features
-        self._relevance_model = GradientBoostingClassifier()
+        self._relevance_model = lgbm.LGBMClassifier(**gbdt_params)
         self._exposure = item_exposure
         self.__clicked_probability = np.ones([position, query, document])
+        self._fitted = False
 
     def do_e_step(self):
         exposure = _expand_exposure_probability(self._exposure_probability, self._relevance_probability.shape)
@@ -49,7 +50,7 @@ class RegressionBasedEM:
 
     def do_m_step(self):
         self._exposure_probability = self._calculate_exposure_probablity()
-        self._relevance_probability = self._relevance_probability
+        self._relevance_probability = self._calculate_relevance()
 
     def _calculate_exposure_probablity(self):
         denominator = np.prod(self._relevance_probability.shape)
@@ -58,12 +59,12 @@ class RegressionBasedEM:
         return (clicked_components + not_clicked_components) / denominator
 
     def _calculate_relevance(self):
-        features, relevance_model = self._get_all_feature_and_relevance_label()
-        self._train_gbdt(features, relevance_model)
+        features, relevance_label = self._get_all_feature_and_relevance_label()
+        self._train_gbdt(features, relevance_label)
 
         features = self._flatten_feature_array(self._feature_vectors)
-        relevance = self.predict_relevance()
-        return self._reshape_relevance_array(relevance) 
+        relevance = self.predict_relevance(features)
+        return self._reshape_relevance_array(relevance)
 
     def _flatten_feature_array(self, features: np.array) -> np.array:
         return features.reshape(self._query * self._document, -1)
@@ -76,12 +77,14 @@ class RegressionBasedEM:
         click_features, click_relevance_label = self._get_feature_and_relevance_label(
             click_indices, self.__clicked_probability
         )
-        not_exposure_indices = np.where(self._exposure == 0)
+        not_exposure_indices = np.where((self._exposure == 0))
         not_exposed_features, not_exposed_relevance_label = self._get_feature_and_relevance_label(
             not_exposure_indices, self._probability_not_expo_rel
         )
         features = np.concatenate([click_features, not_exposed_features], axis=0)
+        features, indices = np.unique(features, axis=0, return_index=True)
         relevance_label = np.concatenate([click_relevance_label, not_exposed_relevance_label])
+        relevance_label = relevance_label[indices]
         return features, relevance_label
 
     def _get_features(self, indices: Tuple[np.array, ...]) -> np.array:
@@ -95,11 +98,20 @@ class RegressionBasedEM:
                                          probabilities: np.array) -> Tuple[np.array, np.array]:
         features = self._get_features(indices)
         labels = self._sample_relevance(indices, probabilities)
+        if len(features) > 100000:
+            indices = np.random.permutation(len(features))[:100000]
+            features = features[indices]
+            labels = labels[indices]
         return features, labels
 
     def _train_gbdt(self, features: np.array, labels: np.array):
-        self._relevance_model.fit(features, labels)
+        if self._fitted:
+            init_score = self._relevance_model.predict(features)
+            self._relevance_model.fit(features, labels, init_score=init_score)
+        else:
+            self._relevance_model.fit(features, labels)
+            self._fitted = True
 
     def predict_relevance(self, features: np.array):
-        gbdt_score = self._relevance_model.predict_proba(features)
-        return 1 / (1 + np.exp(-gbdt_score))
+        gbdt_score = self._relevance_model.predict_proba(features)[:, 1]
+        return gbdt_score
