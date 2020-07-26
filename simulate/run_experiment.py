@@ -1,5 +1,4 @@
 from simulate.generate_data_with_random import UserDocumentDataGenerator, ClickExposureDataGenerator
-from src.model import RegressionBasedEM
 from src.utils import get_model
 from src.trainer import Trainer
 
