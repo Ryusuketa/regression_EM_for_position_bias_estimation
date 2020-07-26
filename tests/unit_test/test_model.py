@@ -1,4 +1,4 @@
-from src.model import RegressionBasedEM
+from src.model import RegressionBasedEM, _expand_exposure_probability, _expand_relevance_probability
 import numpy as np
 import unittest
 
@@ -53,4 +53,19 @@ class TestRegressionBasedEM(unittest.TestCase):
         array = np.arange(1, 16)
         results = self.model._reshape_relevance_array(array)
         expects = np.array([[1, 2, 3, 4, 5], [6, 7, 8, 9, 10], [11, 12, 13, 14, 15]])
+        np.testing.assert_equal(results, expects)
+
+    def test_expand_exposure_probability(self):
+        size = (3, 5)
+        array = np.array([1, 0, 0, 0, 0, 0])
+        results = _expand_exposure_probability(array, size)
+        expects = np.zeros([6, 3, 5])
+        expects[0, :, :] = 1
+        np.testing.assert_equal(results, expects)
+
+    def test_expand_relevance_probability(self):
+        size = (6, )
+        array = np.ones([3, 5])
+        results = _expand_relevance_probability(array, size)
+        expects = np.ones([6, 3, 5])
         np.testing.assert_equal(results, expects)
