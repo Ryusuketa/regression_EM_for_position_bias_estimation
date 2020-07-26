@@ -11,5 +11,3 @@ if __name__ == '__main__':
     results = run_simulate(user_document_params, click_exposure_params)
     with open('trained.pkl', 'rb') as f:
         pickle.dump(results, f)
-
-    
